@@ -6,32 +6,15 @@ source("R/klobuchar_model.R")
 source("R/ionex_writer.R")
 
 # ============================================
-# STEP 1: Define Klobuchar parameters
+# STEP 1: Define grid parameters
 # ============================================
-# These are example broadcast parameters (from typical navigation message)
-# Format: alpha0, alpha1, alpha2, alpha3, beta0, beta1, beta2, beta3
-# Units: alpha in seconds, beta in seconds
-
-# Example parameters (can be replaced with actual broadcast values)
-alpha <- c(2.5e-8, 1.2e-8, -5.3e-8, 1.1e-8)   # alpha0..alpha3
-beta  <- c(9.5e4,  1.3e5,   -6.5e4,   1.9e4)   # beta0..beta3
-
-# ============================================
-# STEP 2: Define grid parameters
-# ============================================
-# Latitude: from 85° to -85° with step -5°
-latitudes <- seq(85.0, -85.0, by = -5.0)
-
-# Longitude: from 0° to 355° with step 5°
-longitudes <- seq(0.0, 355.0, by = 5.0)
-
-# Ionospheric height (km)
+latitudes <- seq(85.0, -85.0, by = -5.0)      # 35 latitude values
+longitudes <- seq(0.0, 355.0, by = 5.0)       # 72 longitude values
 height <- 400.0
 
 # ============================================
-# STEP 3: Define epochs
+# STEP 2: Define epochs
 # ============================================
-# Example: 5 epochs on 15 October 1995 (as in IONEX example)
 epochs <- c(
   as.POSIXct("1995-10-15 00:00:00", tz = "UTC"),
   as.POSIXct("1995-10-15 06:00:00", tz = "UTC"),
@@ -41,27 +24,24 @@ epochs <- c(
 )
 
 # ============================================
-# STEP 4: Generate TEC matrix for each epoch
+# STEP 3: Generate TEC matrix for each epoch
 # ============================================
 
-cat("Generating TEC maps using Klobuchar model...\n")
+cat("\n")
+cat("========================================\n")
+cat("Generating TEC maps using Klobuchar model\n")
+cat("========================================\n\n")
 
-# Pre-allocate list for TEC maps
 tec_maps <- list()
 
 for (k in 1:length(epochs)) {
   epoch <- epochs[k]
-  cat(sprintf("  Processing epoch %d/%d: %s\n", k, length(epochs), format(epoch, "%Y-%m-%d %H:%M:%S")))
+  cat(sprintf("Epoch %d/%d: %s\n", k, length(epochs), format(epoch, "%Y-%m-%d %H:%M:%S")))
   
-  # Extract date/time components
-  year <- as.integer(format(epoch, "%Y"))
-  month <- as.integer(format(epoch, "%m"))
-  day <- as.integer(format(epoch, "%d"))
-  hour <- as.integer(format(epoch, "%H"))
-  minute <- as.integer(format(epoch, "%M"))
-  second <- as.integer(format(epoch, "%S"))
+  # Extract hour (0-23) for the model
+  hour_of_day <- as.integer(format(epoch, "%H"))
   
-  # Create matrix for TEC values (rows = latitudes, cols = longitudes)
+  # Create matrix for TEC values
   tec_matrix <- matrix(NA, nrow = length(latitudes), ncol = length(longitudes))
   
   for (i in 1:length(latitudes)) {
@@ -70,35 +50,25 @@ for (k in 1:length(epochs)) {
     for (j in 1:length(longitudes)) {
       lon <- longitudes[j]
       
-      # Compute Klobuchar delay in seconds
-      delay_sec <- klobuchar_delay(
-        lat_deg = lat,
-        lon_deg = lon,
-        year = year,
-        month = month,
-        day = day,
-        hour = hour,
-        min = minute,
-        sec = second,
-        alpha = alpha,
-        beta = beta
-      )
-      
-      # Convert delay to TECU (TEC units: 1 TECU = 10^16 el/m^2)
-      tec <- delay_to_tec(delay_sec)
+      # Use simplified Klobuchar model
+      tec <- simple_klobuchar_tec(lat, lon, hour_of_day)
       
       # Store in matrix
       tec_matrix[i, j] <- tec
     }
+    
+    # Progress indicator
+    if (i %% 5 == 0) cat("  Progress:", round(i/length(latitudes)*100), "%\n")
   }
   
   tec_maps[[k]] <- tec_matrix
+  cat(sprintf("  Epoch %d complete!\n\n", k))
 }
 
-cat("TEC map generation complete!\n")
+cat("All TEC maps generated successfully!\n\n")
 
 # ============================================
-# STEP 5: Write IONEX file
+# STEP 4: Write IONEX file
 # ============================================
 
 output_file <- "data/example_output.ionex"
@@ -126,7 +96,7 @@ write_ionex_header(
   nepochs = length(epochs),
   epoch_first = epochs[1],
   epoch_last = epochs[length(epochs)],
-  interval = 21600  # 6 hours in seconds
+  interval = 21600
 )
 
 # Write TEC maps, RMS maps, and Height maps for each epoch
@@ -170,5 +140,9 @@ writeLines(sprintf("%60s%s", "", "END OF FILE"), con)
 # Close connection
 close(con)
 
-cat("Done! IONEX file successfully created.\n")
-cat(sprintf("Output file: %s\n", normalizePath(output_file)))
+cat("\n")
+cat("========================================\n")
+cat("SUCCESS! IONEX file created:\n")
+cat(sprintf("  %s\n", normalizePath(output_file)))
+cat(sprintf("  File size: %d bytes\n", file.size(output_file)))
+cat("========================================\n")
