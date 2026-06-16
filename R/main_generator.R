@@ -128,6 +128,7 @@ for (k in 1:length(epochs)) {
   write_height_map(
     con = con,
     epoch = epochs[k],
+    tec_matrix = tec_maps[[k]],
     latitudes = latitudes,
     longitudes = longitudes,
     height = height

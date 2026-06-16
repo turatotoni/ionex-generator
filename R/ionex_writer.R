@@ -153,7 +153,6 @@ write_tec_map <- function(con, epoch, tec_matrix, latitudes, longitudes,
     for (j in seq(1, n_vals, by = 16)) {
       end_idx <- min(j + 15, n_vals)
       values <- tec_row[j:end_idx]
-      # Format: each value is I5 (5 characters, right-aligned)
       line <- ""
       for (val in values) {
         if (is.na(val) || val > 999.9) {
@@ -171,11 +170,11 @@ write_tec_map <- function(con, epoch, tec_matrix, latitudes, longitudes,
   writeLines(sprintf("%6d%54s%s", 1, "", "END OF TEC MAP"), con)
 }
 
-#' Write simple RMS map (placeholder values)
+#' Write RMS map with REALISTIC values based on TEC
 #'
 #' @param con File connection
 #' @param epoch Current epoch as POSIXct
-#' @param tec_matrix Matrix for dimensions (can use actual RMS or placeholder)
+#' @param tec_matrix Matrix of TEC values (rows = latitudes, cols = longitudes)
 #' @param latitudes Vector of latitudes
 #' @param longitudes Vector of longitudes
 #' @param height Ionospheric height (km)
@@ -195,7 +194,7 @@ write_rms_map <- function(con, epoch, tec_matrix, latitudes, longitudes, height 
                      as.integer(format(epoch, "%S")),
                      "", "EPOCH OF CURRENT MAP"), con)
   
-  # Write each latitude slice with placeholder RMS values (20 = 2.0 TECU)
+  # Write each latitude slice
   for (i in 1:length(latitudes)) {
     lat <- latitudes[i]
     
@@ -204,11 +203,30 @@ write_rms_map <- function(con, epoch, tec_matrix, latitudes, longitudes, height 
                        longitudes[2] - longitudes[1], height,
                        "", "LAT/LON1/LON2/DLON/H"), con)
     
+    # Get TEC row for this latitude
+    tec_row <- tec_matrix[i, ]
     n_vals <- length(longitudes)
+    
     for (j in seq(1, n_vals, by = 16)) {
       end_idx <- min(j + 15, n_vals)
-      # Placeholder RMS = 20 (meaning 2.0 TECU with exponent -1)
-      line <- paste(rep("   20", end_idx - j + 1), collapse = "")
+      line <- ""
+      
+      for (k in j:end_idx) {
+        tec_val <- tec_row[k]
+        
+        # Calculate RMS based on TEC value (8% of TEC, min 1.0, max 10.0)
+        if (!is.na(tec_val) && tec_val > 0) {
+          rms_val <- tec_val * 0.08
+          rms_val <- max(rms_val, 1.0)   # Minimum 1.0 TECU
+          rms_val <- min(rms_val, 10.0)  # Maximum 10.0 TECU
+        } else {
+          rms_val <- 1.0
+        }
+        
+        # Convert to scaled integer (multiply by 10)
+        rms_int <- round(rms_val * 10)
+        line <- paste0(line, sprintf("%5d", rms_int))
+      }
       writeLines(line, con)
     }
   }
@@ -217,15 +235,16 @@ write_rms_map <- function(con, epoch, tec_matrix, latitudes, longitudes, height 
   writeLines(sprintf("%6d%54s%s", 1, "", "END OF RMS MAP"), con)
 }
 
-#' Write empty height map (placeholder values)
+#' Write height map with REALISTIC variations
 #'
 #' @param con File connection
 #' @param epoch Current epoch as POSIXct
+#' @param tec_matrix Matrix of TEC values
 #' @param latitudes Vector of latitudes
 #' @param longitudes Vector of longitudes
-#' @param height Ionospheric height (km)
+#' @param height Base ionospheric height (km)
 #'
-write_height_map <- function(con, epoch, latitudes, longitudes, height = 400.0) {
+write_height_map <- function(con, epoch, tec_matrix, latitudes, longitudes, height = 400.0) {
   
   # START OF HEIGHT MAP
   writeLines(sprintf("%6d%54s%s", 1, "", "START OF HEIGHT MAP"), con)
@@ -240,9 +259,13 @@ write_height_map <- function(con, epoch, latitudes, longitudes, height = 400.0) 
                      as.integer(format(epoch, "%S")),
                      "", "EPOCH OF CURRENT MAP"), con)
   
-  # Write each latitude slice with placeholder height values (0 = same as base)
+  # Extract hour for diurnal calculation
+  hour <- as.integer(format(epoch, "%H"))
+  
+  # Write each latitude slice
   for (i in 1:length(latitudes)) {
     lat <- latitudes[i]
+    lat_rad <- lat * pi / 180
     
     writeLines(sprintf("%6.1f%6.1f%6.1f%6.1f%6.1f%40s%s", 
                        lat, longitudes[1], longitudes[length(longitudes)], 
@@ -250,14 +273,92 @@ write_height_map <- function(con, epoch, latitudes, longitudes, height = 400.0) 
                        "", "LAT/LON1/LON2/DLON/H"), con)
     
     n_vals <- length(longitudes)
+    
     for (j in seq(1, n_vals, by = 16)) {
       end_idx <- min(j + 15, n_vals)
-      # Height offset = 0 (meaning same as base radius)
-      line <- paste(rep("    0", end_idx - j + 1), collapse = "")
+      line <- ""
+      
+      for (k in j:end_idx) {
+        lon <- longitudes[k]
+        lon_rad <- lon * pi / 180
+        
+        # 1. Latitude effect: higher near equator (max +30 km)
+        lat_effect <- 30 * cos(lat_rad)^2
+        
+        # 2. Diurnal effect: max at 14:00 local time (range -10 to +10 km)
+        local_hour <- (hour + lon / 15) %% 24
+        hour_rad <- (local_hour - 14) * 2 * pi / 24
+        diurnal_effect <- 10 * cos(hour_rad)
+        
+        # 3. Longitude variation (Earth's magnetic field, ±5 km)
+        lon_effect <- 5 * sin(lon_rad * 3 + 1.2)
+        
+        # 4. TEC correlation: higher TEC = slightly higher ionosphere
+        tec_val <- tec_matrix[i, k]
+        if (!is.na(tec_val) && tec_val > 0) {
+          tec_effect <- (tec_val / 100) * 8  # ±4 km for TEC=50
+        } else {
+          tec_effect <- 0
+        }
+        
+        # Total height offset in km
+        height_offset <- lat_effect + diurnal_effect + lon_effect + tec_effect
+        
+        # Convert to 0.1 km units (multiply by 10)
+        height_int <- round(height_offset * 10)
+        line <- paste0(line, sprintf("%5d", height_int))
+      }
       writeLines(line, con)
     }
   }
   
   # END OF HEIGHT MAP
   writeLines(sprintf("%6d%54s%s", 1, "", "END OF HEIGHT MAP"), con)
+}
+
+#' Validate IONEX file
+#'
+#' @param filepath Path to IONEX file
+#' @return List with validation results
+#'
+validate_ionex <- function(filepath) {
+  lines <- readLines(filepath)
+  
+  results <- list(
+    valid = TRUE,
+    errors = c(),
+    warnings = c()
+  )
+  
+  # Check first line
+  if (!grepl("IONEX VERSION / TYPE", lines[1])) {
+    results$valid <- FALSE
+    results$errors <- c(results$errors, "Missing IONEX VERSION / TYPE")
+  }
+  
+  # Check END OF HEADER
+  header_end <- grep("END OF HEADER", lines)
+  if (length(header_end) == 0) {
+    results$valid <- FALSE
+    results$errors <- c(results$errors, "Missing END OF HEADER")
+  }
+  
+  # Check END OF FILE
+  if (!grepl("END OF FILE", lines[length(lines)])) {
+    results$valid <- FALSE
+    results$errors <- c(results$errors, "Missing END OF FILE")
+  }
+  
+  # Count TEC maps
+  tec_starts <- grep("START OF TEC MAP", lines)
+  tec_ends <- grep("END OF TEC MAP", lines)
+  
+  if (length(tec_starts) != length(tec_ends)) {
+    results$valid <- FALSE
+    results$errors <- c(results$errors, "Mismatched TEC map starts/ends")
+  }
+  
+  results$n_tec_maps <- length(tec_starts)
+  
+  return(results)
 }
