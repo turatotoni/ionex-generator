@@ -1,5 +1,5 @@
 # R/ionex_writer.R
-# IONEX format writer for Version 1.1
+# IONEX format writer for Version 1.0 (RTKPOST compatible)
 
 #' Write IONEX header
 #'
@@ -25,9 +25,9 @@ write_ionex_header <- function(con, param_file,
                                epoch_first, epoch_last,
                                interval = 7200) {
   
-  # IONEX VERSION / TYPE
+  # IONEX VERSION / TYPE - RTKPOST requires 1.0 and GPS
   writeLines(sprintf("%8.1f%12s%1s%19s%3s%17s", 
-                     1.1, "", "I", "GNSS", "", "IONEX VERSION / TYPE"), con)
+                     1.0, "", "I", "GPS", "", "IONEX VERSION / TYPE"), con)
   
   # PGM / RUN BY / DATE
   writeLines(sprintf("%-20s%-20s%-20s%s", 
@@ -306,7 +306,7 @@ write_height_map <- function(con, epoch, tec_matrix, latitudes, longitudes, heig
         
         # Convert to 0.1 km units (multiply by 10)
         height_int <- round(height_offset * 10)
-        line <- paste0(line, sprintf("%5d", height_int))
+        line <- paste0(line, sprintf("%5f", height_int))
       }
       writeLines(line, con)
     }
@@ -314,51 +314,4 @@ write_height_map <- function(con, epoch, tec_matrix, latitudes, longitudes, heig
   
   # END OF HEIGHT MAP
   writeLines(sprintf("%6d%54s%s", 1, "", "END OF HEIGHT MAP"), con)
-}
-
-#' Validate IONEX file
-#'
-#' @param filepath Path to IONEX file
-#' @return List with validation results
-#'
-validate_ionex <- function(filepath) {
-  lines <- readLines(filepath)
-  
-  results <- list(
-    valid = TRUE,
-    errors = c(),
-    warnings = c()
-  )
-  
-  # Check first line
-  if (!grepl("IONEX VERSION / TYPE", lines[1])) {
-    results$valid <- FALSE
-    results$errors <- c(results$errors, "Missing IONEX VERSION / TYPE")
-  }
-  
-  # Check END OF HEADER
-  header_end <- grep("END OF HEADER", lines)
-  if (length(header_end) == 0) {
-    results$valid <- FALSE
-    results$errors <- c(results$errors, "Missing END OF HEADER")
-  }
-  
-  # Check END OF FILE
-  if (!grepl("END OF FILE", lines[length(lines)])) {
-    results$valid <- FALSE
-    results$errors <- c(results$errors, "Missing END OF FILE")
-  }
-  
-  # Count TEC maps
-  tec_starts <- grep("START OF TEC MAP", lines)
-  tec_ends <- grep("END OF TEC MAP", lines)
-  
-  if (length(tec_starts) != length(tec_ends)) {
-    results$valid <- FALSE
-    results$errors <- c(results$errors, "Mismatched TEC map starts/ends")
-  }
-  
-  results$n_tec_maps <- length(tec_starts)
-  
-  return(results)
 }
